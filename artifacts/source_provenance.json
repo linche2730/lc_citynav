@@ -1,0 +1,22 @@
+{
+  "project": "citynav_flightgpt_repro",
+  "sources": {
+    "citynav": {
+      "repo": "https://github.com/water-cookie/citynav.git",
+      "commit": "372ecbd1df58b46ffaad91c118c4838b88b87710",
+      "local_path": "third_party/citynav",
+      "patch": "patches/citynav-path-adapter.patch"
+    },
+    "flightgpt": {
+      "repo": "https://github.com/Uavln/FlightGPT.git",
+      "commit": "a1dd6760b7064a3b63e0ec4f75ae5921b3c95f92",
+      "local_path": "third_party/FlightGPT",
+      "patch": "patches/flightgpt-path-adapter.patch"
+    }
+  },
+  "patch_hashes": {
+    "citynav-path-adapter.patch": "sha256:B6D4DDD848A601FC0FD94114A67FF1DC6FD6B86B731811C317A6DD12833B53D8",
+    "flightgpt-path-adapter.patch": "sha256:4CFBB830033681406155DAF5FAEC7884205C619F0571C9E70DA180D9C9F984FD"
+  },
+  "status": "sources cloned and path-portability patches prepared; metrics unverified"
+}

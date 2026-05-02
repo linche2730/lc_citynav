@@ -1,0 +1,56 @@
+diff --git a/gsamllavanav/defaultpaths.py b/gsamllavanav/defaultpaths.py
+index 24d87b1..248af81 100644
+--- a/gsamllavanav/defaultpaths.py
++++ b/gsamllavanav/defaultpaths.py
+@@ -1,19 +1,25 @@
++import os
+ from pathlib import Path
+ 
+ 
+-PROJECT_ROOT = Path(".")
++def _path_from_env(name: str, default: Path | str) -> Path:
++    return Path(os.environ.get(name, default)).expanduser()
+ 
+-WEIGHTS_DIR = PROJECT_ROOT/"weights"
+-GOAL_PREDICTOR_CHECKPOINT_DIR = PROJECT_ROOT/"checkpoints/goal_predictor"
+-BASELINE_WITH_MAP_CHECKPOINT_DIR = PROJECT_ROOT/"checkpoints/baseline_with_map"
+ 
+-CITYREFER_DATA_DIR = PROJECT_ROOT/"data/cityrefer"
++PROJECT_ROOT = _path_from_env("CITYNAV_PROJECT_ROOT", ".")
++CITYNAV_DATA_ROOT = _path_from_env("CITYNAV_DATA_ROOT", PROJECT_ROOT/"data")
++
++WEIGHTS_DIR = _path_from_env("CITYNAV_WEIGHTS_ROOT", PROJECT_ROOT/"weights")
++GOAL_PREDICTOR_CHECKPOINT_DIR = _path_from_env("CITYNAV_GOAL_PREDICTOR_CHECKPOINT_DIR", PROJECT_ROOT/"checkpoints/goal_predictor")
++BASELINE_WITH_MAP_CHECKPOINT_DIR = _path_from_env("CITYNAV_BASELINE_WITH_MAP_CHECKPOINT_DIR", PROJECT_ROOT/"checkpoints/baseline_with_map")
++
++CITYREFER_DATA_DIR = _path_from_env("CITYREFER_DATA_DIR", CITYNAV_DATA_ROOT/"cityrefer")
+ OBJECTS_PATH = CITYREFER_DATA_DIR/"objects.json"
+ PROCESSED_DECRIPTIONS_PATH = CITYREFER_DATA_DIR/"processed_descriptions.json"
+-MTURK_TRAJECTORY_DIR = PROJECT_ROOT/"data/citynav"
++MTURK_TRAJECTORY_DIR = _path_from_env("CITYNAV_ANNOTATION_DIR", CITYNAV_DATA_ROOT/"citynav")
+ 
+-ORTHO_IMAGE_DIR = PROJECT_ROOT/"data/rgbd"
+-SUBBLOCKS_DIR = PROJECT_ROOT/"data/subblocks"
++ORTHO_IMAGE_DIR = _path_from_env("CITYNAV_RGBD_DIR", CITYNAV_DATA_ROOT/"rgbd")
++SUBBLOCKS_DIR = _path_from_env("CITYNAV_SUBBLOCKS_DIR", CITYNAV_DATA_ROOT/"subblocks")
+ 
+ # SoM
+ ## configs
+@@ -32,10 +38,13 @@ GDINO_MODEL_SIZE = "B" if False else "T"
+ GDINO_CONFIG_DIR = PROJECT_ROOT/"gsamllavanav/configs/groundingdino"
+ GDINO_CONFIG_PATH = GDINO_CONFIG_DIR/f"GroundingDINO_Swin{'B_cfg' if GDINO_MODEL_SIZE == 'B' else 'T_OGC'}.py"
+ ## weights
+-GDINO_CHECKPOINT_PATH = WEIGHTS_DIR/f"groundingdino/groundingdino_swin{'b_cogcoor' if GDINO_MODEL_SIZE == 'B' else 't_ogc'}.pth"
++GDINO_CHECKPOINT_PATH = _path_from_env(
++    "GDINO_CHECKPOINT_PATH",
++    WEIGHTS_DIR/f"groundingdino/groundingdino_swin{'b_cogcoor' if GDINO_MODEL_SIZE == 'B' else 't_ogc'}.pth"
++)
+ MOBILE_SAM_CHECKPOINT_PATH = WEIGHTS_DIR/"mobile_sam/mobile_sam.pt"
+ ## data
+-GSAM_MAPS_DIR = PROJECT_ROOT/"data/gsam"
++GSAM_MAPS_DIR = _path_from_env("CITYNAV_GSAM_DIR", CITYNAV_DATA_ROOT/"gsam")
+ 
+ # Goal Predictor
+-DEPTH_ENCODER_CHECKPOINT_PATH = WEIGHTS_DIR/"vlnce/data/ddppo-models/gibson-2plus-resnet50.pth"
+\ No newline at end of file
++DEPTH_ENCODER_CHECKPOINT_PATH = WEIGHTS_DIR/"vlnce/data/ddppo-models/gibson-2plus-resnet50.pth"

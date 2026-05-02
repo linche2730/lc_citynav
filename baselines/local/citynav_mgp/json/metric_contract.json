@@ -1,0 +1,19 @@
+{
+  "baseline_id": "citynav_mgp",
+  "status": "contract_only_unverified",
+  "task": "CityNav language-goal aerial navigation",
+  "dataset": "CityNav",
+  "splits": ["val_seen", "val_unseen", "test_unseen"],
+  "metrics": {
+    "NE": {"description": "Navigation error in meters", "direction": "lower_is_better"},
+    "SR": {"description": "Success rate", "direction": "higher_is_better"},
+    "OSR": {"description": "Oracle success rate", "direction": "higher_is_better"},
+    "SPL": {"description": "Success weighted by path length", "direction": "higher_is_better"}
+  },
+  "source": {
+    "repo": "https://github.com/water-cookie/citynav",
+    "commit": "372ecbd1df58b46ffaad91c118c4838b88b87710"
+  },
+  "notes": "Metric contract only. Do not cite numbers until a manifest-backed run verifies them."
+}
+

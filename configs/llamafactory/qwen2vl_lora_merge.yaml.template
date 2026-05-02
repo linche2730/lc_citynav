@@ -1,0 +1,14 @@
+### Note: DO NOT use quantized model or quantization_bit when merging lora adapters
+
+### model
+model_name_or_path: {{QWEN25_VL_ROOT}}
+adapter_name_or_path: {{LLAMAFACTORY_SFT_ADAPTER_DIR}}
+template: qwen2_vl
+trust_remote_code: true
+
+### export
+export_dir: {{LLAMAFACTORY_MERGE_OUTPUT_DIR}}
+export_size: 5
+export_device: cpu
+export_legacy_format: false
+

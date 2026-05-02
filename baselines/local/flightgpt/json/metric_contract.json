@@ -1,0 +1,19 @@
+{
+  "baseline_id": "flightgpt_citynav",
+  "status": "contract_only_unverified",
+  "task": "FlightGPT evaluation on CityNav val_unseen difficulty splits",
+  "dataset": "CityNav",
+  "splits": ["val_unseen_easy", "val_unseen_medium", "val_unseen_hard"],
+  "metrics": {
+    "NE": {"description": "Weighted navigation error in meters", "direction": "lower_is_better"},
+    "SR": {"description": "Weighted success rate", "direction": "higher_is_better"},
+    "OSR": {"description": "Weighted oracle success rate", "direction": "higher_is_better"},
+    "SPL": {"description": "Weighted success weighted by path length", "direction": "higher_is_better"}
+  },
+  "source": {
+    "repo": "https://github.com/Uavln/FlightGPT",
+    "commit": "a1dd6760b7064a3b63e0ec4f75ae5921b3c95f92"
+  },
+  "notes": "Metric contract only. Do not cite numbers until a manifest-backed run verifies them."
+}
+

@@ -1,0 +1,376 @@
+diff --git a/eval.py b/eval.py
+index a595849..4a9edbb 100644
+--- a/eval.py
++++ b/eval.py
+@@ -1,6 +1,10 @@
++import argparse
++import json
+ import os
+ import sys
+ import re
++import time
++from pathlib import Path
+ import cv2
+ import numpy as np
+ import matplotlib.pyplot as plt
+@@ -17,17 +21,16 @@ from gsamllavanav.space import Pose4D, view_area_corners
+ from concurrent.futures import ThreadPoolExecutor, as_completed
+ 
+ 
+-cropclient.load_image_cache()
+-
+ # model config
+ API_CONFIG = {
+-    "api_key": "EMPTY",
+-    "api_base": "http://0.0.0.0:8888/v1",   #use your port
+-    "api_version": "2024-05-01-preview",
+-    "model": "qwen_2_5_vl_7b",
++    "api_key": os.environ.get("VLLM_API_KEY", "EMPTY"),
++    "api_base": os.environ.get("VLLM_API_BASE", "http://0.0.0.0:8888/v1"),
++    "api_version": os.environ.get("VLLM_API_VERSION", "2024-05-01-preview"),
++    "model": os.environ.get("VLLM_MODEL_NAME", "qwen_2_5_vl_7b"),
+     "system_prompt": "You are an intelligent autonomous aerial vehicle (UAV) equipped for real-world navigation and visual target localization."
+ }
+-SAVE_PATH = "./experiment"
++SAVE_PATH = Path(os.environ.get("FLIGHTGPT_OUTPUT_ROOT", "./experiment"))
++PHOTO_ROOT = Path(os.environ.get("FLIGHTGPT_PHOTO_ROOT", "./R1PhotoData"))
+ 
+ 
+ def create_dir(file_path):
+@@ -102,29 +105,48 @@ def move(pose: Pose4D, dst: Pose4D, iterations: int):
+     return trajectory
+ 
+ def calculate_mean_metrics(results, nums):
+-    total_nums = nums['easy'] + nums['medium'] + nums['hard']
+-    NE = results['easy'].mean_final_pos_to_goal_dist * nums['easy']/total_nums + \
+-        results['medium'].mean_final_pos_to_goal_dist * nums['medium']/total_nums + \
+-        results['hard'].mean_final_pos_to_goal_dist * nums['hard']/total_nums
+-
+-    SR = results['easy'].success_rate_final_pos_to_goal * nums['easy']/total_nums + \
+-        results['medium'].success_rate_final_pos_to_goal * nums['medium']/total_nums + \
+-        results['hard'].success_rate_final_pos_to_goal * nums['hard']/total_nums
+-        
+-    OSR = results['easy'].success_rate_oracle_pos_to_goal  * nums['easy']/total_nums + \
+-        results['medium'].success_rate_oracle_pos_to_goal  * nums['medium']/total_nums + \
+-        results['hard'].success_rate_oracle_pos_to_goal  * nums['hard']/total_nums
+-
+-    SPL = results['easy'].success_rate_weighted_by_path_length  * nums['easy']/total_nums + \
+-        results['medium'].success_rate_weighted_by_path_length  * nums['medium']/total_nums + \
+-        results['hard'].success_rate_weighted_by_path_length  * nums['hard']/total_nums
++    total_nums = sum(nums.values())
++    if total_nums == 0:
++        return None, None, None, None
++
++    NE = sum(results[split].mean_final_pos_to_goal_dist * nums[split] / total_nums for split in results)
++    SR = sum(results[split].success_rate_final_pos_to_goal * nums[split] / total_nums for split in results)
++    OSR = sum(results[split].success_rate_oracle_pos_to_goal * nums[split] / total_nums for split in results)
++    SPL = sum(results[split].success_rate_weighted_by_path_length * nums[split] / total_nums for split in results)
+     
+     return NE, SR, OSR, SPL
+ 
+-def run_nav_gym(citynavData, split, step, action_num):
++def metrics_to_dict(metrics):
++    if hasattr(metrics, "to_dict"):
++        return json_safe(metrics.to_dict())
++    return json_safe({
++        key: getattr(metrics, key)
++        for key in dir(metrics)
++        if not key.startswith("_") and isinstance(getattr(metrics, key), (int, float, str, bool))
++    })
++
++def json_safe(value):
++    if isinstance(value, np.generic):
++        return value.item()
++    if isinstance(value, np.ndarray):
++        return value.tolist()
++    if isinstance(value, dict):
++        return {str(k): json_safe(v) for k, v in value.items()}
++    if isinstance(value, (list, tuple)):
++        return [json_safe(v) for v in value]
++    return value
++
++def limit_citynav_data(citynavData, limit):
++    if limit is None or limit <= 0 or limit >= len(citynavData):
++        return citynavData
++    citynavData.episodes = citynavData.episodes[:limit]
++    citynavData.maps = citynavData.maps[:limit]
++    citynavData.data_len = len(citynavData.episodes)
++    return citynavData
++
++def run_nav_gym(citynavData, split, step, action_num, max_workers, dry_run):
+     trajectory = {}
+     errors = []
+-    max_workers = 4
+ 
+     def process_sample(i):
+         try:
+@@ -134,8 +156,12 @@ def run_nav_gym(citynavData, split, step, action_num):
+             for _ in range(step):
+                 if pose_history != []:
+                     cur_citynavData.episode.teacher_trajectory[0] = pose_history[-1]
+-                navGym = NavGym(cur_citynavData)
++                navGym = NavGym(cur_citynavData, data_dir=str(PHOTO_ROOT))
+                 start_pose = navGym.start_pose
++
++                if dry_run:
++                    cur_trajectory = [start_pose]
++                    break
+                 
+                 agent = initialize_agent(navGym)
+                 map_name = navGym.episode.id[0]
+@@ -151,7 +177,7 @@ def run_nav_gym(citynavData, split, step, action_num):
+                 true_target_px = navGym.target_px
+                 
+ 
+-                save_path = f"{SAVE_PATH}/visualized_image/{os.path.basename(navGym.cur_whole_map)}"
++                save_path = str(SAVE_PATH / "visualized_image" / os.path.basename(navGym.cur_whole_map))
+                 # visualize_prediction(navGym, navGym.cur_whole_map, landmark_bbox, target_pred_px, true_target_px, save_path)  #visualize the prediction result
+ 
+                 pred_pose = compute_pose(navGym, target_pred_px, true_start_px, map_name)
+@@ -187,20 +213,66 @@ def run_nav_gym(citynavData, split, step, action_num):
+             else:
+                 trajectory[traj_id] = cur_trajectory
+ 
+-    return trajectory, errors, SAVE_PATH 
+-
++    return trajectory, errors, str(SAVE_PATH)
++
++
++def split_env(value):
++    return [item for item in value.replace(",", " ").split() if item]
++
++def parse_args():
++    parser = argparse.ArgumentParser(description="FlightGPT CityNav evaluation with portable paths.")
++    parser.add_argument("--citynav-dir", default=os.environ.get("CITYNAV_ANNOTATION_DIR", "./data/citynav"))
++    parser.add_argument("--rgbd-dir", default=os.environ.get("CITYNAV_RGBD_DIR", "./data/rgbd-new"))
++    parser.add_argument("--output-dir", default=os.environ.get("FLIGHTGPT_OUTPUT_ROOT", "./experiment"))
++    parser.add_argument("--photo-root", default=os.environ.get("FLIGHTGPT_PHOTO_ROOT", "./R1PhotoData"))
++    parser.add_argument("--api-base", default=os.environ.get("VLLM_API_BASE", API_CONFIG["api_base"]))
++    parser.add_argument("--api-key", default=os.environ.get("VLLM_API_KEY", API_CONFIG["api_key"]))
++    parser.add_argument("--api-version", default=os.environ.get("VLLM_API_VERSION", API_CONFIG["api_version"]))
++    parser.add_argument("--model", default=os.environ.get("VLLM_MODEL_NAME", API_CONFIG["model"]))
++    parser.add_argument("--splits", nargs="+", default=split_env(os.environ.get("FLIGHTGPT_EVAL_SPLITS", "easy medium hard")))
++    parser.add_argument("--limit", type=int, default=int(os.environ.get("FLIGHTGPT_EVAL_LIMIT", "0")))
++    parser.add_argument("--step-num", type=int, default=int(os.environ.get("FLIGHTGPT_STEP_NUM", "2")))
++    parser.add_argument("--action-num", type=int, default=int(os.environ.get("FLIGHTGPT_ACTION_NUM", "75")))
++    parser.add_argument("--max-workers", type=int, default=int(os.environ.get("FLIGHTGPT_MAX_WORKERS", "4")))
++    parser.add_argument("--dry-run", action="store_true", default=os.environ.get("FLIGHTGPT_DRY_RUN", "0") == "1")
++    return parser.parse_args()
+ 
+ def main():
++    args = parse_args()
++    global SAVE_PATH, PHOTO_ROOT
++    SAVE_PATH = Path(args.output_dir).expanduser().resolve()
++    PHOTO_ROOT = Path(args.photo_root).expanduser().resolve()
++    citynav_dir = Path(args.citynav_dir).expanduser().resolve()
++    rgbd_dir = Path(args.rgbd_dir).expanduser().resolve()
++
++    SAVE_PATH.mkdir(parents=True, exist_ok=True)
++    PHOTO_ROOT.mkdir(parents=True, exist_ok=True)
++    cropclient.load_image_cache(image_dir=rgbd_dir)
++
++    API_CONFIG.update({
++        "api_key": args.api_key,
++        "api_base": args.api_base,
++        "api_version": args.api_version,
++        "model": args.model,
++    })
++
+     results = {}
+     nums = {}
+-    step_num = 2    #total steps that agent take
+-    action_num = 75     #actions per step
+-    for split in ["easy", "medium", "hard"]:
+-        data_path = f"./data/citynav/citynav_val_unseen_{split}.json"
+-        citynavData = CityNavData(data_path)
+-
+-        traj, errors, image_dir = run_nav_gym(citynavData, split, step_num, action_num)
++    errors_by_split = {}
++    started_at = time.strftime("%Y-%m-%dT%H:%M:%S%z")
++
++    for split in args.splits:
++        data_path = citynav_dir / f"citynav_val_unseen_{split}.json"
++        if not data_path.exists():
++            raise FileNotFoundError(f"CityNav split file not found: {data_path}")
++        citynavData = CityNavData(str(data_path), image_dir=str(rgbd_dir))
++        citynavData = limit_citynav_data(citynavData, args.limit)
++
++        traj, errors, image_dir = run_nav_gym(
++            citynavData, split, args.step_num, args.action_num, args.max_workers, args.dry_run
++        )
+         print(f"Image Dir: {image_dir}, Errors: {errors}")
++        errors_by_split[split] = errors
+ 
+         episodes = [ep for ep in citynavData.episodes if ep.id in traj]
+         metrics = eval_planning_metrics(episodes, traj)
+@@ -211,6 +283,36 @@ def main():
+     NE, SR, OSR, SPL = calculate_mean_metrics(results, nums)
+     print("Final Results:", results)
+     print(f'NE:{NE}\nSR:{SR}\nOSR:{OSR}\nSPL:{SPL}')
++    manifest = {
++        "run_id": os.environ.get("RUN_ID", SAVE_PATH.name),
++        "status": "dry_run_completed" if args.dry_run else "completed",
++        "started_at": started_at,
++        "finished_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
++        "citynav_dir": str(citynav_dir),
++        "rgbd_dir": str(rgbd_dir),
++        "output_dir": str(SAVE_PATH),
++        "photo_root": str(PHOTO_ROOT),
++        "env_file": os.environ.get("REPRO_ENV_FILE", ""),
++        "command": os.environ.get("RUN_COMMAND", ""),
++        "source_commits": {
++            "citynav": os.environ.get("CITYNAV_SOURCE_COMMIT", ""),
++            "flightgpt": os.environ.get("FLIGHTGPT_SOURCE_COMMIT", ""),
++        },
++        "api_base": API_CONFIG["api_base"],
++        "model": API_CONFIG["model"],
++        "splits": args.splits,
++        "limit": args.limit,
++        "step_num": args.step_num,
++        "action_num": args.action_num,
++        "max_workers": args.max_workers,
++        "dry_run": args.dry_run,
++        "num_episodes": nums,
++        "errors": errors_by_split,
++        "metrics_by_split": {split: metrics_to_dict(metrics) for split, metrics in results.items()},
++        "metrics_summary": json_safe({"NE": NE, "SR": SR, "OSR": OSR, "SPL": SPL}),
++    }
++    with open(SAVE_PATH / "manifest.json", "w", encoding="utf-8") as f:
++        json.dump(manifest, f, indent=2, ensure_ascii=False)
+ 
+ if __name__ == "__main__":
+     main()
+diff --git a/gsamllavanav/defaultpaths.py b/gsamllavanav/defaultpaths.py
+index 43b338c..26edc65 100644
+--- a/gsamllavanav/defaultpaths.py
++++ b/gsamllavanav/defaultpaths.py
+@@ -1,19 +1,26 @@
++import os
+ from pathlib import Path
+ 
+ 
+-PROJECT_ROOT = Path(".")
++def _path_from_env(name: str, default: Path | str) -> Path:
++    return Path(os.environ.get(name, default)).expanduser()
+ 
+-WEIGHTS_DIR = PROJECT_ROOT/"weights"
+-GOAL_PREDICTOR_CHECKPOINT_DIR = PROJECT_ROOT/"checkpoints/goal_predictor"
+-BASELINE_WITH_MAP_CHECKPOINT_DIR = PROJECT_ROOT/"checkpoints/baseline_with_map"
+ 
+-CITYREFER_DATA_DIR = PROJECT_ROOT/"data/cityrefer"
++PROJECT_ROOT = _path_from_env("FLIGHTGPT_PROJECT_ROOT", ".")
++DATA_ROOT = _path_from_env("FLIGHTGPT_DATA_ROOT", PROJECT_ROOT/"data")
++CITYNAV_DATA_ROOT = _path_from_env("CITYNAV_DATA_ROOT", DATA_ROOT)
++
++WEIGHTS_DIR = _path_from_env("CITYNAV_WEIGHTS_ROOT", PROJECT_ROOT/"weights")
++GOAL_PREDICTOR_CHECKPOINT_DIR = _path_from_env("CITYNAV_GOAL_PREDICTOR_CHECKPOINT_DIR", PROJECT_ROOT/"checkpoints/goal_predictor")
++BASELINE_WITH_MAP_CHECKPOINT_DIR = _path_from_env("CITYNAV_BASELINE_WITH_MAP_CHECKPOINT_DIR", PROJECT_ROOT/"checkpoints/baseline_with_map")
++
++CITYREFER_DATA_DIR = _path_from_env("CITYREFER_DATA_DIR", CITYNAV_DATA_ROOT/"cityrefer")
+ OBJECTS_PATH = CITYREFER_DATA_DIR/"objects.json"
+ PROCESSED_DECRIPTIONS_PATH = CITYREFER_DATA_DIR/"processed_descriptions.json"
+-MTURK_TRAJECTORY_DIR = PROJECT_ROOT/"data/citynav"
++MTURK_TRAJECTORY_DIR = _path_from_env("CITYNAV_ANNOTATION_DIR", CITYNAV_DATA_ROOT/"citynav")
+ 
+-ORTHO_IMAGE_DIR = PROJECT_ROOT/"data/rgbd-new"
+-SUBBLOCKS_DIR = PROJECT_ROOT/"data/subblocks"
++ORTHO_IMAGE_DIR = _path_from_env("CITYNAV_RGBD_DIR", DATA_ROOT/"rgbd-new")
++SUBBLOCKS_DIR = _path_from_env("CITYNAV_SUBBLOCKS_DIR", CITYNAV_DATA_ROOT/"subblocks")
+ 
+ # SoM
+ ## configs
+@@ -30,14 +37,18 @@ SEEM_CHECKPOINT_PATH = SOM_WEIGHTS_DIR/"seem_focall_v1.pt"
+ GDINO_MODEL_SIZE = "B" if False else "T"
+ ## configs
+ GDINO_CONFIG_DIR = PROJECT_ROOT/"gsamllavanav/configs/groundingdino"
+-# GDINO_CONFIG_PATH = GDINO_CONFIG_DIR/f"GroundingDINO_Swin{'B_cfg' if GDINO_MODEL_SIZE == 'B' else 'T_OGC'}.py"
+-GDINO_CONFIG_PATH = '/mnt/vepfs/fs_users/Djinhan/LLN/weights/groundingdino/GroundingDINO_SwinT_OGC.py'
++GDINO_CONFIG_PATH = _path_from_env(
++    "GDINO_CONFIG_PATH",
++    GDINO_CONFIG_DIR/f"GroundingDINO_Swin{'B_cfg' if GDINO_MODEL_SIZE == 'B' else 'T_OGC'}.py"
++)
+ ## weights
+-# GDINO_CHECKPOINT_PATH = WEIGHTS_DIR/f"groundingdino/groundingdino_swin{'b_cogcoor' if GDINO_MODEL_SIZE == 'B' else 't_ogc'}.pth"
+-GDINO_CHECKPOINT_PATH = '/mnt/vepfs/fs_users/Djinhan/LLN/weights/groundingdino/groundingdino_swint_ogc.pth'
++GDINO_CHECKPOINT_PATH = _path_from_env(
++    "GDINO_CHECKPOINT_PATH",
++    WEIGHTS_DIR/f"groundingdino/groundingdino_swin{'b_cogcoor' if GDINO_MODEL_SIZE == 'B' else 't_ogc'}.pth"
++)
+ MOBILE_SAM_CHECKPOINT_PATH = WEIGHTS_DIR/"mobile_sam/mobile_sam.pt"
+ ## data
+-GSAM_MAPS_DIR = PROJECT_ROOT/"data/gsam"
++GSAM_MAPS_DIR = _path_from_env("CITYNAV_GSAM_DIR", CITYNAV_DATA_ROOT/"gsam")
+ 
+ # Goal Predictor
+-DEPTH_ENCODER_CHECKPOINT_PATH = WEIGHTS_DIR/"vlnce/data/ddppo-models/gibson-2plus-resnet50.pth"
+\ No newline at end of file
++DEPTH_ENCODER_CHECKPOINT_PATH = WEIGHTS_DIR/"vlnce/data/ddppo-models/gibson-2plus-resnet50.pth"
+diff --git a/open-r1-multimodal/run_scripts/run_grpo_rec_lora.sh b/open-r1-multimodal/run_scripts/run_grpo_rec_lora.sh
+index 91f6d85..583b788 100644
+--- a/open-r1-multimodal/run_scripts/run_grpo_rec_lora.sh
++++ b/open-r1-multimodal/run_scripts/run_grpo_rec_lora.sh
+@@ -1,21 +1,43 @@
+-export DEBUG_MODE="true"
+-export CUDA_VISIBLE_DEVICES=0,1,2,3
++#!/usr/bin/env bash
++set -euo pipefail
+ 
+-RUN_NAME="FlightGPT"
+-CURRENT_DIR=$(pwd)
+-export LOG_PATH="$CURRENT_DIR/experiment/debug_log_$RUN_NAME.txt"
++SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
++CURRENT_DIR="${FLIGHTGPT_REPO_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
+ 
+-torchrun --nproc_per_node="4" \
++if [[ -n "${FLIGHTGPT_ENV_FILE:-}" ]]; then
++    # shellcheck disable=SC1090
++    source "$FLIGHTGPT_ENV_FILE"
++fi
++
++export DEBUG_MODE="${DEBUG_MODE:-true}"
++export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3}"
++
++RUN_NAME="${RUN_NAME:-FlightGPT}"
++OUTPUT_ROOT="${FLIGHTGPT_OUTPUT_ROOT:-$CURRENT_DIR/experiment}"
++MODEL_ROOT="${MODEL_ROOT:-${FLIGHTGPT_MODEL_ROOT:-$CURRENT_DIR/model_weight}}"
++QWEN25_VL_ROOT="${QWEN25_VL_ROOT:-$MODEL_ROOT/Qwen2.5-VL-7B-Instruct}"
++TRAIN_DATA_ROOT="${TRAIN_DATA_ROOT:-${FLIGHTGPT_TRAIN_DATA_ROOT:-$CURRENT_DIR/data/training_data}}"
++CITYNAV_GRPO_DATA="${CITYNAV_GRPO_DATA:-$TRAIN_DATA_ROOT/citynav_train_data.json}"
++CITYNAV_GRPO_IMAGES="${CITYNAV_GRPO_IMAGES:-$TRAIN_DATA_ROOT/images}"
++NPROC_PER_NODE="${NPROC_PER_NODE:-4}"
++MASTER_ADDR="${MASTER_ADDR:-127.0.0.1}"
++MASTER_PORT="${MASTER_PORT:-12346}"
++REPORT_TO="${REPORT_TO:-wandb}"
++
++mkdir -p "$OUTPUT_ROOT/logs" "$OUTPUT_ROOT/$RUN_NAME"
++export LOG_PATH="${LOG_PATH:-$OUTPUT_ROOT/logs/debug_log_$RUN_NAME.txt}"
++
++torchrun --nproc_per_node="$NPROC_PER_NODE" \
+     --nnodes="1" \
+     --node_rank="0" \
+-    --master_addr="127.0.0.1" \
+-    --master_port="12346" \
++    --master_addr="$MASTER_ADDR" \
++    --master_port="$MASTER_PORT" \
+     $CURRENT_DIR/open-r1-multimodal/src/open_r1/grpo_jsonl_citynav.py \
+     --deepspeed $CURRENT_DIR/open-r1-multimodal/local_scripts/zero2.json \
+-    --output_dir $CURRENT_DIR/experiment/$RUN_NAME \
+-    --model_name_or_path $CURRENT_DIR/model_weight/Qwen2.5-VL-7B-Instruct \
+-    --dataset_name $CURRENT_DIR/data/training_data/citynav_train_data.json \
+-    --image_folders $CURRENT_DIR/data/training_data/images \
++    --output_dir "$OUTPUT_ROOT/$RUN_NAME" \
++    --model_name_or_path "$QWEN25_VL_ROOT" \
++    --dataset_name "$CITYNAV_GRPO_DATA" \
++    --image_folders "$CITYNAV_GRPO_IMAGES" \
+     --max_prompt_length 1024 \
+     --max_completion_length 512 \
+     --num_generations 4 \
+@@ -25,7 +47,7 @@ torchrun --nproc_per_node="4" \
+     --bf16 \
+     --torch_dtype bfloat16 \
+     --data_seed 42 \
+-    --report_to wandb \
++    --report_to "$REPORT_TO" \
+     --gradient_checkpointing true \
+     --attn_implementation flash_attention_2 \
+     --num_train_epochs 1 \
